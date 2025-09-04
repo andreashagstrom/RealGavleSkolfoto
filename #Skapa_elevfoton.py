@@ -202,8 +202,36 @@ def create_pdf_badges(pdf_path, rows, class_name, log_file):
 
 # ===== 12. FOOTER =====
 def draw_footer_with_mail(c, page_w, page_h, page_num, total_pages, version):
+    timestamp = _now_ts()
+    python_ver = sys.version.split()[0]
+    reportlab_ver = getattr(sys.modules.get('reportlab'), 'Version', 'unknown')
+    text_before = f"Skolfoton Realgymnasiet Gävle v {version} | Uppdaterad "
+    text_after = f" med Python {python_ver}, ReportLab {reportlab_ver}. Skript av "
+    author_text = "Andreas Hagström"
+    mailto = "mailto:andreas.hagstrom@realgymnasiet.se"
+
+    c.setFont("Helvetica", 8)
+    total_text = text_before + timestamp + text_after + author_text + "."
+    total_width = c.stringWidth(total_text, "Helvetica", 8)
+    x_start = (page_w - total_width) / 2
+    y_pos = 15*mm
+    c.setFillColor(colors.black)
+    c.drawString(x_start, y_pos, text_before)
+    x_cursor = x_start + c.stringWidth(text_before, "Helvetica", 8)
+    c.setFont("Helvetica-Bold", 8)
+    c.drawString(x_cursor, y_pos, timestamp)
+    x_cursor += c.stringWidth(timestamp, "Helvetica-Bold", 8)
+    c.setFont("Helvetica", 8)
+    c.drawString(x_cursor, y_pos, text_after + author_text + ".")
+    author_width = c.stringWidth(author_text, "Helvetica", 8)
+    c.linkURL(mailto, (x_cursor + c.stringWidth(text_after, "Helvetica", 8),
+                        y_pos - 2,
+                        x_cursor + c.stringWidth(text_after, "Helvetica", 8) + author_width,
+                        y_pos + 8), relative=0, thickness=0, color=colors.blue)
+    c.setFillColor(colors.black)
     c.setFont("Helvetica", 8)
     c.drawCentredString(page_w/2, 10*mm, f"Sida {page_num} av {total_pages}")
+
 
 # ===== 13. SKAPA KLASSFOTON =====
 def create_pdf_classphotos(pdf_path, rows, class_name, version, quality, log_file, missing_list):

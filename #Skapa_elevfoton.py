@@ -34,35 +34,35 @@ def check_dependencies():
 
 check_dependencies()
 
-# ===== 2. KONFIG / VERSION =====
-version = "1.39"
+# ===== 2. VERSION =====
+version = "1.60"
 
-# ===== STARTTEXT I TERMINAL =====
 print(f"\nSkolfoton Realgymnasiet Gävle v {version}\n")
 
-# ===== 3. VILKA MAPPAR SKALL KÖRAS? ===== #
+# ===== 3. VÄLJ MAPPA/MAPPAR =====
 base_folders_input = input("Ange en eller flera mappnamn (t.ex. 23,24,25): ").strip()
 if not base_folders_input:
     print("Fel: du måste ange minst en mapp")
     sys.exit(1)
 
-# Gör om till lista och trimma bort mellanslag
 base_folders = [m.strip() for m in base_folders_input.split(",") if m.strip()]
 if not base_folders:
     print("Fel: inga giltiga mappar angavs")
     sys.exit(1)
 
-# ===== 4. STARTTID =====
+# ===== 4. STARTDATA =====
 script_start_ts = time.time()
 computer = socket.gethostname()
 
 def _now_ts():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+# ===== 5. LOGGNING =====
 def write_log_line(log_file, level, msg, console=True):
     timestamp = _now_ts()
     tag = "[INFO   ] " if level.upper() == "INFO" else "[SAKNAS ] " if "Saknad bild" in msg else "[ERROR  ] "
     line = f"{tag}{timestamp} - {msg}\n"
+    os.makedirs(os.path.dirname(log_file), exist_ok=True)
     with open(log_file, "a", encoding="utf-8") as f:
         f.write(line)
     if console:
@@ -70,18 +70,19 @@ def write_log_line(log_file, level, msg, console=True):
 
 def write_class_header(log_file, class_name):
     header = f"-- Bearbetar klass: {class_name} --"
+    os.makedirs(os.path.dirname(log_file), exist_ok=True)
     with open(log_file, "a", encoding="utf-8") as f:
         f.write(header + "\n")
     print(header)
 
-# ===== 5. ANVÄNDARVAL =====
+# ===== 6. ANVÄNDARVAL =====
 create_csv = input("Vill du skapa CSV-filer? (Y/N): ").strip().lower() == 'y'
 create_badges = input("Vill du skapa PDF: Namnskyltar? (Y/N): ").strip().lower() == 'y'
 create_classphotos = input("Vill du skapa PDF: Klassfoton? (Y/N): ").strip().lower() == 'y'
 
-print("Startar bearbetning... (se respektive log.txt för detaljer)")
+print("Startar bearbetning... (se loggfil_YYYYMMDD.txt i respektive årsmapp för detaljer)")
 
-# ===== 6. ANVÄNDARVAL: BILDKVALITET =====
+# ===== 7. VÄLJ BILDKVALITET =====
 def choose_image_quality():
     while True:
         user_quality = input("Ange önskad bildkvalitet (1-100): ").strip()
@@ -94,7 +95,7 @@ def choose_image_quality():
 
 image_quality = choose_image_quality()
 
-# ===== 7. OPTIMERA BILD =====
+# ===== 8. OPTIMERA BILD =====
 def get_optimized_image_reader(path, target_w_mm, target_h_mm, dpi=200, quality=85):
     try:
         px_w = int(target_w_mm / mm * dpi / 25.4)
@@ -106,22 +107,10 @@ def get_optimized_image_reader(path, target_w_mm, target_h_mm, dpi=200, quality=
             img.convert("RGB").save(buff, format="JPEG", quality=quality, optimize=True)
             buff.seek(0)
             return ImageReader(buff)
-    except Exception as e:
+    except Exception:
         return None
 
-# ===== 8. RIT-FUNKTION: SAKNAD BILD =====
-def draw_missing_photo(c, x, y, w, h, text="Bild saknas"):
-    c.setStrokeColor(colors.red)
-    c.setLineWidth(3)
-    c.rect(x, y, w, h, stroke=1, fill=0)
-    c.setLineWidth(2)
-    c.line(x, y, x + w, y + h)
-    c.line(x + w, y, x, y + h)
-    c.setFont("Helvetica-Bold", 14)
-    c.setFillColor(colors.black)
-    c.drawCentredString(x + w/2, y + h/2 - 7, text)
-
-# ===== 9. LÄS OCH PARSA .txt-FILER =====
+# ===== 9. PARSA TXT-FILER =====
 def parse_txt_file(txt_path, class_name, year, photo_dir):
     rows = []
     try:
@@ -129,17 +118,52 @@ def parse_txt_file(txt_path, class_name, year, photo_dir):
             lines = [ln.strip() for ln in f.readlines() if ln.strip()]
     except Exception:
         return rows
+
     for ln in lines:
         parts = ln.split()
-        if len(parts) >= 3:
-            email = parts[-1]
-            names = parts[:-1]
+        if len(parts) < 4:
+            continue
+
+        # Hämta fullständigt namn (mellan klasskod och sista fältet)
+        fullname_parts = parts[1:-1]
+        if len(fullname_parts) > 1:
+            firstname = fullname_parts[-1]
+            surname = " ".join(fullname_parts[:-1])
         else:
-            email = ""
-            names = parts
-        firstname = names[0]
-        surname = " ".join(names[1:]) if len(names) > 1 else ""
-        image_path = os.path.join(photo_dir, f"{class_name}_{surname}_{firstname}.jpg")
+            surname = fullname_parts[0]
+            firstname = ""
+
+        email = ""
+
+        base_filename = f"{class_name}_{surname}_{firstname}.jpg"
+
+        variations = set()
+        for sn in [surname, surname.replace(" ", "_"), surname.replace("_", " ")]:
+            for fn in [firstname, firstname.replace(" ", "_"), firstname.replace("_", " ")]:
+                variations.add(f"{class_name}_{sn}_{fn}.jpg")
+
+        image_path = None
+        for cand in variations:
+            cand_path = os.path.join(photo_dir, cand)
+            if os.path.exists(cand_path):
+                image_path = cand_path
+                break
+
+        if not image_path:
+            try:
+                for fname in os.listdir(photo_dir):
+                    low = fname.lower()
+                    if (class_name.lower() in low
+                        and surname.lower().replace(" ", "").replace("_", "") in low.replace(" ", "").replace("_", "")
+                        and firstname.lower().replace(" ", "").replace("_", "") in low.replace(" ", "").replace("_", "")):
+                        image_path = os.path.join(photo_dir, fname)
+                        break
+            except FileNotFoundError:
+                pass
+
+        if not image_path:
+            image_path = os.path.join(photo_dir, base_filename)
+
         rows.append({
             "firstname": firstname,
             "surname": surname,
@@ -174,6 +198,8 @@ def create_pdf_badges(pdf_path, rows, class_name, log_file):
         y_positions = [0.65, 0.5, 0.32]
         for r in rows:
             firstname, surname, class_text = r["firstname"], r["surname"], r["class"]
+
+            # Förnamn
             fontsize_fn = 120
             c.setFont("Helvetica-Bold", fontsize_fn)
             while c.stringWidth(firstname, "Helvetica-Bold", fontsize_fn) > max_width and fontsize_fn > 10:
@@ -181,6 +207,7 @@ def create_pdf_badges(pdf_path, rows, class_name, log_file):
                 c.setFont("Helvetica-Bold", fontsize_fn)
             c.drawCentredString(page_w/2, page_h * y_positions[0], firstname)
 
+            # Efternamn
             fontsize_sn = 96
             c.setFont("Helvetica-Bold", fontsize_sn)
             while c.stringWidth(surname, "Helvetica-Bold", fontsize_sn) > max_width and fontsize_sn > 10:
@@ -188,12 +215,14 @@ def create_pdf_badges(pdf_path, rows, class_name, log_file):
                 c.setFont("Helvetica-Bold", fontsize_sn)
             c.drawCentredString(page_w/2, page_h * y_positions[1], surname)
 
+            # Klass
             fontsize_class = 80
             c.setFont("Helvetica-Bold", fontsize_class)
             while c.stringWidth(class_text, "Helvetica-Bold", fontsize_class) > max_width and fontsize_class > 10:
                 fontsize_class -= 1
                 c.setFont("Helvetica-Bold", fontsize_class)
             c.drawCentredString(page_w/2, page_h * y_positions[2], class_text)
+
             c.showPage()
         c.save()
         write_log_line(log_file, "INFO", f"PDF Namnskyltar skapad: {os.path.normpath(pdf_path)}")
@@ -232,7 +261,6 @@ def draw_footer_with_mail(c, page_w, page_h, page_num, total_pages, version):
     c.setFont("Helvetica", 8)
     c.drawCentredString(page_w/2, 10*mm, f"Sida {page_num} av {total_pages}")
 
-
 # ===== 13. SKAPA KLASSFOTON =====
 def create_pdf_classphotos(pdf_path, rows, class_name, version, quality, log_file, missing_list):
     missing = 0
@@ -241,14 +269,26 @@ def create_pdf_classphotos(pdf_path, rows, class_name, version, quality, log_fil
         c = canvas.Canvas(pdf_path, pagesize=landscape(A4))
         page_w, page_h = landscape(A4)
         c.setTitle(f"{class_name} - Klassfoton")
+
         cols, rows_per_page = 4, 2
-        top_margin, bottom_margin = 30*mm, 20*mm
+        top_margin, bottom_margin = 30*mm, 30*mm
         left_margin, right_margin = 25*mm, 25*mm
+
         usable_height = page_h - top_margin - bottom_margin
         usable_width = page_w - left_margin - right_margin
-        cell_w, cell_h = usable_width / cols, usable_height / rows_per_page
-        photo_w, photo_h = min(50*mm, cell_w * 0.9), min(60*mm, cell_h * 0.75)
-        total_pages = (len(rows) + (cols*rows_per_page - 1)) // (cols*rows_per_page)
+
+        orig_cell_w = usable_width / cols
+        orig_cell_h = usable_height / rows_per_page
+
+        margin_factor = 0.9
+        cell_w = orig_cell_w * margin_factor
+        cell_h = orig_cell_h * margin_factor
+
+        photo_w = cell_w * 0.9
+        photo_h = cell_h * 0.8
+
+        students_per_page = cols * rows_per_page
+        total_pages = (len(rows) + students_per_page - 1) // students_per_page
 
         def draw_header():
             c.setFont("Helvetica-Bold", 36)
@@ -257,39 +297,74 @@ def create_pdf_classphotos(pdf_path, rows, class_name, version, quality, log_fil
             c.setFont("Helvetica", 12)
             c.drawCentredString(page_w/2, page_h - 27*mm, student_count_text)
 
-        page_num = 1
-        draw_header()
-        for idx, r in enumerate(rows):
-            if idx > 0 and idx % (cols * rows_per_page) == 0:
-                draw_footer_with_mail(c, page_w, page_h, page_num, total_pages, version)
+        for page in range(total_pages):
+            draw_header()
+            page_students = rows[page * students_per_page:(page + 1) * students_per_page]
+
+            for idx in range(students_per_page):
+                row_idx = idx // cols
+                col_idx = idx % cols
+
+                cell_x = left_margin + col_idx * orig_cell_w + (orig_cell_w - cell_w) / 2
+                cell_y = page_h - top_margin - (row_idx + 1) * orig_cell_h + (orig_cell_h - cell_h) / 2
+
+                if idx < len(page_students):
+                    r = page_students[idx]
+                    firstname, surname, image_path = r["firstname"], r["surname"], r["@image"]
+
+                    # Rita bild
+                    has_image = False
+                    if image_path and os.path.exists(image_path):
+                        try:
+                            img_reader = get_optimized_image_reader(image_path, photo_w, photo_h, quality=quality)
+                            if img_reader:
+                                img = ImageReader(img_reader)
+                                img_w, img_h = img.getSize()
+                                img_aspect = img_w / img_h
+                                frame_aspect = photo_w / photo_h
+
+                                if img_aspect > frame_aspect:
+                                    draw_w = photo_w
+                                    draw_h = photo_w / img_aspect
+                                else:
+                                    draw_h = photo_h
+                                    draw_w = photo_h * img_aspect
+
+                                draw_x = cell_x + (cell_w - draw_w) / 2
+                                draw_y = cell_y + (cell_h - draw_h) / 2
+
+                                c.drawImage(img_reader, draw_x, draw_y, width=draw_w, height=draw_h)
+                                has_image = True
+                        except Exception:
+                            pass
+
+                    # Namn under bilden
+                    c.setFont("Helvetica-Bold", 14)
+                    name_y = cell_y - 14
+                    c.drawCentredString(cell_x + cell_w/2, name_y, f"{firstname} {surname}")
+
+                    # Ram
+                    frame_color = colors.black if has_image else colors.red
+                    c.setStrokeColor(frame_color)
+                    c.rect(cell_x, cell_y, cell_w, cell_h, stroke=1, fill=0)
+                    c.setStrokeColor(colors.black)
+
+                    # Text om bild saknas
+                    if not has_image:
+                        c.setFont("Helvetica-Bold", 14)
+                        c.setFillColor(colors.red)
+                        c.drawCentredString(cell_x + cell_w/2, cell_y + cell_h/2, "Bild saknas")
+                        c.setFillColor(colors.black)
+
+                        msg = f"Saknad bild för {firstname} {surname}: {os.path.normpath(image_path)}"
+                        write_log_line(log_file, "SAKNAS", msg)
+                        missing += 1
+                        missing_list.append(r)
+
+            draw_footer_with_mail(c, page_w, page_h, page + 1, total_pages, version)
+            if page < total_pages - 1:
                 c.showPage()
-                page_num += 1
-                draw_header()
-            row_idx, col_idx = (idx % (cols * rows_per_page)) // cols, (idx % (cols * rows_per_page)) % cols
-            x = left_margin + col_idx * cell_w + (cell_w - photo_w)/2
-            y = page_h - top_margin - row_idx * cell_h - photo_h - ((cell_h - photo_h)/2)
-            firstname, surname, image_path = r["firstname"], r["surname"], r["@image"]
-            img_reader = None
-            if image_path and os.path.exists(image_path):
-                img_reader = get_optimized_image_reader(image_path, photo_w, photo_h, quality=quality)
-            if img_reader:
-                try:
-                    c.drawImage(img_reader, x, y, width=photo_w, height=photo_h, preserveAspectRatio=True, anchor='c')
-                except Exception:
-                    draw_missing_photo(c, x, y, photo_w, photo_h)
-                    missing += 1
-                    msg = f"Saknad bild för {firstname} {surname}: {os.path.normpath(image_path)}"
-                    write_log_line(log_file, "SAKNAS", msg)
-                    missing_list.append(r)
-            else:
-                draw_missing_photo(c, x, y, photo_w, photo_h)
-                missing += 1
-                msg = f"Saknad bild för {firstname} {surname}: {os.path.normpath(image_path)}"
-                write_log_line(log_file, "SAKNAS", msg)
-                missing_list.append(r)
-            c.setFont("Helvetica", 12)
-            c.drawCentredString(x + photo_w/2, y - (6*mm), f"{firstname} {surname}")
-        draw_footer_with_mail(c, page_w, page_h, page_num, total_pages, version)
+
         c.save()
         write_log_line(log_file, "INFO", f"PDF Klassfoton skapad: {os.path.normpath(pdf_path)} (saknade bilder: {missing})")
         return missing
@@ -297,7 +372,7 @@ def create_pdf_classphotos(pdf_path, rows, class_name, version, quality, log_fil
         write_log_line(log_file, "ERROR", f"Fel vid skapande av klassfoton för {class_name}: {e}")
         return missing
 
-# ===== 14. HUVUDLOOP FÖR VARJE MAPP =====
+# ===== 14. HUVUDLOOP =====
 total_missing_global = 0
 for base_folder in base_folders:
     PHOTO_DIR = os.path.join(base_folder, "Foton")
@@ -306,7 +381,9 @@ for base_folder in base_folders:
     OUT_CLASS = os.path.join(base_folder, "Klassfoton")
     TXT_DIR = os.path.join(base_folder, "Elevdata")
     os.makedirs(OUT_CLASS, exist_ok=True)
-    LOG_FILE = os.path.join(OUT_CLASS, "log.txt")
+
+    datum = datetime.now().strftime("%Y%m%d")
+    LOG_FILE = os.path.join(base_folder, f"loggfil_{datum}.txt")
     if os.path.exists(LOG_FILE):
         os.remove(LOG_FILE)
 
